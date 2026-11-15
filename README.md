@@ -1,7 +1,7 @@
 # 到期管理 - 再也不扔过期东西
 
 一句话痛点：东西过期了才发现，扔掉的都是钱；现有的 App 全要一件件手动填，填两天就放弃了。
-在线演示：待 GitHub Pages 部署后填写。
+在线演示：https://laomaiai.github.io/expiry-manager/
 
 ## 它是做什么的
 

@@ -1,7 +1,7 @@
 # Expiry Manager - never throw away expired stuff again
 
 One-line pain point: you only notice things when they are already expired, and what you throw away is money; existing apps make you type every item by hand, and you give up after two days.
-Live demo: to be added after the GitHub Pages deploy.
+Live demo: https://laomaiai.github.io/expiry-manager/
 
 ## What it does
 
