@@ -30,6 +30,33 @@ describe('sanitizeItem', () => {
     expect(s?.source).toBe('manual')
     expect(s?.id).toBeTruthy()
   })
+  it('keeps PAO fields when they are valid and drops bad ones', () => {
+    const s = sanitizeItem({
+      name: '面霜',
+      expiryDate: '2027-05-01',
+      categoryId: 'cosmetics',
+      openedDate: '2026-11-01',
+      paoMonths: 6,
+      printedExpiryDate: '2027-06-01',
+      expiryBasis: 'pao',
+    })
+    expect(s?.openedDate).toBe('2026-11-01')
+    expect(s?.paoMonths).toBe(6)
+    expect(s?.printedExpiryDate).toBe('2027-06-01')
+    expect(s?.expiryBasis).toBe('pao')
+    const bad = sanitizeItem({
+      name: '面霜',
+      expiryDate: '2027-05-01',
+      openedDate: '2026-02-30',
+      paoMonths: 0,
+      printedExpiryDate: 'tomorrow',
+      expiryBasis: 'whenever',
+    })
+    expect(bad?.openedDate).toBeUndefined()
+    expect(bad?.paoMonths).toBeUndefined()
+    expect(bad?.printedExpiryDate).toBeUndefined()
+    expect(bad?.expiryBasis).toBeUndefined()
+  })
 })
 
 describe('sortItems', () => {
@@ -82,10 +109,26 @@ describe('CSV export', () => {
   it('writes a header and one row per item', () => {
     const csv = exportItemsCSV([item({ name: '牛奶', categoryId: 'fresh-milk' })])
     const lines = csv.split('\n')
-    expect(lines[0]).toBe('名称,分类,保质期,购买日期,条码,数量,备注,来源')
+    expect(lines[0]).toBe('名称,分类,保质期,到期依据,购买日期,开封日期,条码,数量,备注,来源')
     expect(lines[1]).toContain('牛奶')
     expect(lines[1]).toContain('鲜牛奶')
     expect(lines[1]).toContain('2026-11-20')
+    expect(lines[1]).toContain('包装日期')
+  })
+  it('writes the PAO basis for items resolved by opening date', () => {
+    const csv = exportItemsCSV([
+      item({
+        name: '面霜',
+        categoryId: 'cosmetics',
+        expiryDate: '2027-05-01',
+        openedDate: '2026-11-01',
+        paoMonths: 6,
+        printedExpiryDate: '2027-06-01',
+        expiryBasis: 'pao',
+      }),
+    ])
+    expect(csv.split('\n')[1]).toContain('开封后 6 个月')
+    expect(csv.split('\n')[1]).toContain('2026-11-01')
   })
   it('quotes cells with commas or quotes', () => {
     const csv = exportItemsCSV([item({ name: '牛奶,全脂', note: '他说"好喝"' })])

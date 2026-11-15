@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import { decodeBarcodeFromImage, scanBarcodeFromVideo } from '../lib/barcode'
 import { extractAllDates, suggestExpiryFromPurchase, todayISO, type DateCandidate } from '../lib/dates'
 import { recognizeDateText } from '../lib/ocr'
+import { lookupProduct as lookupBeautyProduct } from '../lib/openBeautyFacts'
 import { lookupProduct } from '../lib/openFoodFacts'
-import { SHELF_LIFE, shelfLifeFor } from '../lib/shelfLife'
+import { paoExpiry, resolveExpiry } from '../lib/pao'
+import { CATEGORY_GROUPS, entriesForGroup, groupOf, paoDefaultMonths, shelfLifeFor } from '../lib/shelfLife'
 import { makeItem, type ExpiryItem, type ItemSource } from '../lib/store'
 
 type Tab = 'ocr' | 'barcode' | 'manual'
@@ -21,8 +23,12 @@ export default function AddFlow({
   const [tab, setTab] = useState<Tab>('ocr')
   const [name, setName] = useState(editing?.name ?? '')
   const [categoryId, setCategoryId] = useState(editing?.categoryId ?? 'other')
-  const [expiryDate, setExpiryDate] = useState(editing?.expiryDate ?? '')
+  // When editing an item whose effective date came from PAO, the date
+  // input shows the printed date; the effective date is recomputed on save.
+  const [expiryDate, setExpiryDate] = useState(editing?.printedExpiryDate ?? editing?.expiryDate ?? '')
   const [purchaseDate, setPurchaseDate] = useState(editing?.purchaseDate ?? todayISO())
+  const [openedDate, setOpenedDate] = useState(editing?.openedDate ?? '')
+  const [paoMonthsText, setPaoMonthsText] = useState(editing?.paoMonths !== undefined ? String(editing.paoMonths) : '')
   const [quantity, setQuantity] = useState(editing?.quantity !== undefined ? String(editing.quantity) : '')
   const [note, setNote] = useState(editing?.note ?? '')
   const [barcode, setBarcode] = useState(editing?.barcode ?? '')
@@ -45,21 +51,40 @@ export default function AddFlow({
   }, [])
 
   const shelf = shelfLifeFor(categoryId)
+  const paoDefault = paoDefaultMonths(shelf)
+  const paoActive = paoDefault !== null && openedDate !== ''
+  const paoMonthsValue =
+    paoActive && paoMonthsText !== '' ? Math.max(1, Math.min(36, Math.floor(Number(paoMonthsText)) || paoDefault)) : paoDefault
+  const paoDate = paoActive && paoMonthsValue !== null ? paoExpiry(openedDate, paoMonthsValue) : null
+  const resolved = resolveExpiry(expiryDate || null, openedDate || null, paoActive ? paoMonthsValue : null)
+  const effectiveDate = resolved.expiryDate
   const suggested = purchaseDate ? suggestExpiryFromPurchase(purchaseDate, shelf.days) : null
 
-  const valid = name.trim() !== '' && expiryDate !== ''
+  const valid = name.trim() !== '' && effectiveDate !== null
+
+  function changeCategory(id: string) {
+    setCategoryId(id)
+    setPaoMonthsText('')
+    if (paoDefaultMonths(shelfLifeFor(id)) === null) setOpenedDate('')
+  }
 
   function save() {
-    if (!valid) return
-    const base = {
+    if (!valid || !effectiveDate) return
+    const base: Omit<ExpiryItem, 'id' | 'createdAt'> = {
       name: name.trim(),
       categoryId,
-      expiryDate,
+      expiryDate: effectiveDate,
       purchaseDate: purchaseDate || undefined,
       barcode: barcode || undefined,
       quantity: quantity !== '' ? Math.max(1, Math.floor(Number(quantity))) : undefined,
       note: note.trim() || undefined,
       source,
+    }
+    if (paoActive && paoMonthsValue !== null) {
+      base.openedDate = openedDate
+      base.paoMonths = paoMonthsValue
+      base.expiryBasis = resolved.basis
+      if (expiryDate !== '' && expiryDate !== effectiveDate) base.printedExpiryDate = expiryDate
     }
     if (editing) onSave({ ...editing, ...base })
     else onSave(makeItem(base))
@@ -97,14 +122,25 @@ export default function AddFlow({
     if (clean === '') return
     stopScanning()
     setBarcode(clean)
+    const g = groupOf(categoryId)
+    if (g === 'medicine' || g === 'supplements') {
+      setStatus('药品和保健品不做扫码查询，请用手动添加，按包装日期填写。')
+      return
+    }
     setSource('barcode')
     setStatus('正在查询商品名称…')
     const info = await lookupProduct(clean)
     if (info.name) {
       setName(info.name)
-      setStatus(`找到商品：${info.name}${info.brands ? `（${info.brands}）` : ''}。请选分类，确认到期日。`)
+      setStatus(`在 OpenFoodFacts 找到商品：${info.name}${info.brands ? `（${info.brands}）` : ''}。请选分类，确认到期日。`)
+      return
+    }
+    const beauty = await lookupBeautyProduct(clean)
+    if (beauty.name) {
+      setName(beauty.name)
+      setStatus(`在 OpenBeautyFacts 找到商品：${beauty.name}${beauty.brands ? `（${beauty.brands}）` : ''}。请选日化分类，确认到期日。`)
     } else {
-      setStatus('没有找到这个条码的商品信息，请手动输入名称。')
+      setStatus('两个数据库都没找到这个条码，请手动输入名称，再按参考表选分类。')
     }
   }
 
@@ -213,7 +249,7 @@ export default function AddFlow({
 
       {!editing && tab === 'barcode' && (
         <div className="mb-4 rounded-lg bg-amber-50 p-3 text-sm text-stone-700">
-          <p className="mb-2">扫条码查商品名，再按分类的参考保质期推算到期日。商品数据来自公开的 OpenFoodFacts 数据库。</p>
+          <p className="mb-2">扫条码查商品名，再按分类的参考保质期推算到期日。食品查 OpenFoodFacts，日化用品查 OpenBeautyFacts。药品和保健品不扫码，请手动添加。</p>
           <div className="flex flex-wrap gap-2">
             {!scanning ? (
               <button type="button" onClick={() => void startScanning()} className="rounded-lg bg-amber-600 px-4 py-2 font-semibold text-white">
@@ -278,22 +314,27 @@ export default function AddFlow({
           <span className="text-sm font-semibold text-stone-700">分类</span>
           <select
             value={categoryId}
-            onChange={(e) => setCategoryId(e.target.value)}
+            onChange={(e) => changeCategory(e.target.value)}
             className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2"
           >
-            {SHELF_LIFE.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.label}
-              </option>
+            {CATEGORY_GROUPS.map((g) => (
+              <optgroup key={g.id} label={g.label}>
+                {entriesForGroup(g.id).map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.label}
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
           <span className="mt-1 block text-xs text-stone-500">
             参考保质期：{shelf.days === null ? '无通用参考值，以包装日期为准' : `${shelf.days} 天（${shelf.note}）`}
+            {paoDefault !== null ? ` 开封后参考 ${paoDefault} 个月，可在下方改。` : ''}
           </span>
         </label>
         <div className="grid grid-cols-2 gap-3">
           <label className="block">
-            <span className="text-sm font-semibold text-stone-700">保质期至 *</span>
+            <span className="text-sm font-semibold text-stone-700">{paoActive ? '包装到期日' : '保质期至 *'}</span>
             <input
               type="date"
               value={expiryDate}
@@ -311,6 +352,37 @@ export default function AddFlow({
             />
           </label>
         </div>
+        {paoDefault !== null ? (
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="text-sm font-semibold text-stone-700">开封日期（可选）</span>
+              <input
+                type="date"
+                value={openedDate}
+                onChange={(e) => setOpenedDate(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2"
+              />
+            </label>
+            <label className="block">
+              <span className="text-sm font-semibold text-stone-700">开封后有效期（月）</span>
+              <input
+                type="number"
+                min={1}
+                max={36}
+                value={paoMonthsText}
+                onChange={(e) => setPaoMonthsText(e.target.value.replace(/[^\d]/g, ''))}
+                placeholder={String(paoDefault)}
+                className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2"
+              />
+            </label>
+          </div>
+        ) : null}
+        {paoActive && paoDate ? (
+          <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            开封后 {paoMonthsValue} 个月到期：{paoDate}
+            {expiryDate !== '' ? (paoDate < expiryDate ? '，比包装日期早，保存时用这个。' : '，比包装日期晚，保存时仍用包装日期。') : '，没有包装日期，保存时就用这个日期。'}
+          </p>
+        ) : null}
         {suggested && suggested !== expiryDate ? (
           <button
             type="button"

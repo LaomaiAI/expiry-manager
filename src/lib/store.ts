@@ -14,6 +14,14 @@ export interface ExpiryItem {
   expiryDate: string
   /** ISO date YYYY-MM-DD, optional */
   purchaseDate?: string
+  /** ISO date the product was opened, optional (period after opening) */
+  openedDate?: string
+  /** PAO in months used for this item, optional */
+  paoMonths?: number
+  /** Printed expiry date, kept when PAO changed the effective date */
+  printedExpiryDate?: string
+  /** Which input determined expiryDate: the printed date or the PAO date */
+  expiryBasis?: 'printed' | 'pao'
   barcode?: string
   quantity?: number
   note?: string
@@ -66,6 +74,12 @@ export function sanitizeItem(row: unknown): ExpiryItem | null {
     source,
   }
   if (typeof r.purchaseDate === 'string' && parseISODate(r.purchaseDate)) item.purchaseDate = r.purchaseDate
+  if (typeof r.openedDate === 'string' && parseISODate(r.openedDate)) item.openedDate = r.openedDate
+  if (typeof r.paoMonths === 'number' && Number.isInteger(r.paoMonths) && r.paoMonths > 0 && r.paoMonths <= 36)
+    item.paoMonths = r.paoMonths
+  if (typeof r.printedExpiryDate === 'string' && parseISODate(r.printedExpiryDate))
+    item.printedExpiryDate = r.printedExpiryDate
+  if (r.expiryBasis === 'pao' || r.expiryBasis === 'printed') item.expiryBasis = r.expiryBasis
   if (typeof r.barcode === 'string' && r.barcode !== '') item.barcode = r.barcode
   if (typeof r.quantity === 'number' && r.quantity > 0) item.quantity = r.quantity
   if (typeof r.note === 'string' && r.note !== '') item.note = r.note
@@ -130,7 +144,7 @@ function csvCell(value: string): string {
 }
 
 export function exportItemsCSV(items: ExpiryItem[]): string {
-  const header = ['名称', '分类', '保质期', '购买日期', '条码', '数量', '备注', '来源']
+  const header = ['名称', '分类', '保质期', '到期依据', '购买日期', '开封日期', '条码', '数量', '备注', '来源']
   const lines = [header.map(csvCell).join(',')]
   for (const item of sortItems(items)) {
     lines.push(
@@ -138,7 +152,9 @@ export function exportItemsCSV(items: ExpiryItem[]): string {
         item.name,
         categoryLabel(item.categoryId),
         item.expiryDate,
+        item.expiryBasis === 'pao' ? `开封后 ${item.paoMonths ?? ''} 个月` : '包装日期',
         item.purchaseDate ?? '',
+        item.openedDate ?? '',
         item.barcode ?? '',
         item.quantity !== undefined ? String(item.quantity) : '',
         item.note ?? '',

@@ -1,5 +1,5 @@
 import { daysLeftLabel, getBucket, todayISO } from '../lib/dates'
-import { categoryLabel } from '../lib/shelfLife'
+import { categoryLabel, groupLabelFor } from '../lib/shelfLife'
 import type { ExpiryItem } from '../lib/store'
 
 const BUCKET_STYLE: Record<string, string> = {
@@ -33,11 +33,16 @@ export default function ItemCard({
         <div className="min-w-0">
           <p className="truncate text-base font-semibold text-stone-900">{item.name}</p>
           <p className="mt-0.5 text-sm text-stone-500">
-            {categoryLabel(item.categoryId)}
+            {groupLabelFor(item.categoryId)} · {categoryLabel(item.categoryId)}
             {item.quantity !== undefined ? ` · ${item.quantity} 件` : ''}
             {item.purchaseDate ? ` · 购于 ${item.purchaseDate}` : ''} · {SOURCE_LABEL[item.source]}
           </p>
           {item.note ? <p className="mt-0.5 truncate text-sm text-stone-500">{item.note}</p> : null}
+          {item.expiryBasis === 'pao' && item.printedExpiryDate ? (
+            <p className="mt-0.5 text-sm text-amber-700">
+              按开封后 {item.paoMonths} 个月算；包装印 {item.printedExpiryDate}
+            </p>
+          ) : null}
         </div>
         <span className={`shrink-0 rounded-full border px-2 py-0.5 text-xs font-semibold ${BUCKET_STYLE[bucket]}`}>
           {daysLeftLabel(item.expiryDate, today)}
